@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Dashboard Ejecutivo</title>
+  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { font-family: 'Inter', system-ui, -apple-system, sans-serif; }
+    /* Estilos específicos para la exportación limpia a PDF */
+    @media print {
+      body { background: #ffffff; color: #000000; }
+      .no-print { display: none !important; }
+      .print-card { border: none !important; box-shadow: none !important; page-break-inside: avoid; }
+      .grid { display: block !important; }
+      .chart-container { max-height: 250px !important; margin-bottom: 20px; }
+    }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-800 min-h-screen">
+
+  <header class="bg-white border-b border-slate-100 py-4 px-6 sticky top-0 z-50 no-print shadow-xs">
+    <div class="max-w-7xl mx-auto flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+      <div>
+        <h1 class="text-xl font-bold text-slate-900 tracking-tight">Panel de Control Operativo</h1>
+        <p class="text-xs text-slate-500">Origen: <span class="font-medium">BASE_DATOS</span></p>
+      </div>
+      <div class="flex items-center gap-4 w-full sm:w-auto justify-end">
+        <div class="text-right">
+          <span id="refresh-timer" class="text-xs bg-slate-100 text-slate-600 px-2 py-1 rounded-sm font-mono">Refresco en: 300s</span>
+          <p id="last-update" class="text-[10px] text-slate-400 mt-1">Actualizando...</p>
+        </div>
+        <button onclick="window.print()" class="bg-slate-900 hover:bg-slate-800 text-white text-sm font-medium px-4 py-2 rounded-lg transition-all flex items-center gap-2 cursor-pointer shadow-sm">
+          <span>Exportar PDF</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-7xl mx-auto p-4 sm:p-6 space-y-6">
+
+    <section id="filters-section" class="bg-white p-4 rounded-xl border border-slate-100 shadow-xs no-print">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Filtros Avanzados</h2>
+        <button onclick="resetFilters()" class="text-xs text-blue-600 hover:underline cursor-pointer">Limpiar filtros</button>
+      </div>
+      <div id="filters-container" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
+        </div>
+    </section>
+
+    <section id="kpi-section" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div class="bg-white p-6 rounded-xl border border-slate-100 shadow-xs print-card">
+        <p class="text-xs font-medium text-slate-400 uppercase tracking-wider">Total Registros</p>
+        <p id="kpi-total" class="text-3xl font-bold text-slate-900 mt-2">0</p>
+      </div>
+      </section>
+
+    <section class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div class="bg-white p-6 rounded-xl border border-slate-100 shadow-xs print-card chart-container">
+        <h3 id="chart1-title" class="text-sm font-semibold text-slate-700 mb-4">Distribución Principal</h3>
+        <div class="relative h-64">
+          <canvas id="chartAnalisis1"></canvas>
+        </div>
+      </div>
+      <div class="bg-white p-6 rounded-xl border border-slate-100 shadow-xs print-card chart-container">
+        <h3 id="chart2-title" class="text-sm font-semibold text-slate-700 mb-4">Análisis Comparativo</h3>
+        <div class="relative h-64">
+          <canvas id="chartAnalisis2"></canvas>
+        </div>
+      </div>
+    </section>
+
+    <section class="bg-white rounded-xl border border-slate-100 shadow-xs overflow-hidden print-card">
+      <div class="p-4 border-b border-slate-100 flex justify-between items-center">
+        <h3 class="text-sm font-semibold text-slate-700">Reporte Detallado</h3>
+        <span id="row-count" class="text-xs bg-slate-50 text-slate-500 px-2 py-0.5 rounded-full">0 filas</span>
+      </div>
+      <div class="overflow-x-auto max-h-96">
+        <table class="w-full text-left border-collapse text-sm">
+          <thead class="bg-slate-50 text-slate-600 sticky top-0 font-medium border-b border-slate-100">
+            <tr id="table-headers"></tr>
+          </thead>
+          <tbody id="table-body" class="divide-y divide-slate-100 text-slate-600">
+            <tr>
+              <td class="p-4 text-center text-slate-400" colspan="100%">Cargando flujos de datos...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    let rawData = [];
+    let headers = [];
+    let activeFilters = {};
+    let chart1, chart2;
+    let countdown = 300;
+    let countdownInterval;
+
+    window.addEventListener('DOMContentLoaded', () => {
+      initFetch();
+      startCountdown();
+    });
+
+    function startCountdown() {
+      clearInterval(countdownInterval);
+      countdown = 300;
+      const timerLabel = document.getElementById('refresh-timer');
+      
+      countdownInterval = setInterval(() => {
+        countdown--;
+        timerLabel.innerText = `Refresco en: ${countdown}s`;
+        if (countdown <= 0) {
+          initFetch();
+          countdown = 300;
+        }
+      }, 1000);
+    }
+
+    function initFetch() {
+      document.getElementById('last-update').innerText = "Sincronizando...";
+      google.script.run
+        .withSuccessHandler(processData)
+        .withFailureHandler(err => {
+          console.error(err);
+          document.getElementById('table-body').innerHTML = `<tr><td class="p-4 text-red-500 text-center" colspan="100%">Error de conexión con la base de datos.</td></tr>`;
+        })
+        .getDashboardData();
+    }
+
+    function processData(response) {
+      if (response.error) {
+        document.getElementById('table-body').innerHTML = `<tr><td class="p-4 text-red-500 text-center" colspan="100%">${response.error}</td></tr>`;
+        return;
+      }
+      
+      rawData = response.data;
+      headers = response.headers;
+      
+      document.getElementById('last-update').innerText = "Última actualización: " + new Date().toLocaleTimeString();
+      
+      buildFilters();
+      applyFiltersAndRender();
+    }
+
+    function buildFilters() {
+      const container = document.getElementById('filters-container');
+      // Conservar filtros seleccionados si existen tras el autorefresco
+      const savedFilters = { ...activeFilters }; 
+      container.innerHTML = '';
+
+      // Filtramos las columnas candidatas a ser selectores (texto, categorías, estados)
+      // Tomamos un máximo de las primeras 4 columnas que sirvan como segmentación
+      let filterCount = 0;
+      headers.forEach(header => {
+        if (filterCount >= 4) return;
+        
+        // Obtener valores únicos no vacíos
+        let uniqueValues = [...new Set(rawData.map(item => item[header]))].filter(v => v !== undefined && v !== '');
+        
+        // Si tiene sentido filtrar por esta columna (entre 1 y 30 categorías distintas)
+        if (uniqueValues.length > 0 && uniqueValues.length < 30) {
+          filterCount++;
+          activeFilters[header] = savedFilters[header] || '';
+
+          let div = document.createElement('div');
+          div.className = "flex flex-col gap-1";
+          div.innerHTML = `
+            <label class="text-xs font-medium text-slate-500">${header}</label>
+            <select onchange="updateFilter('${header}', this.value)" class="bg-slate-50 border border-slate-200 text-slate-700 text-xs rounded-lg p-2 focus:bg-white focus:ring-1 focus:ring-slate-900 focus:outline-hidden cursor-pointer">
+              <option value="">Todos</option>
+              ${uniqueValues.map(v => `<option value="${v}" ${savedFilters[header] === String(v) ? 'selected' : ''}>${v}</option>`).join('')}
+            </select>
+          `;
+          container.appendChild(div);
+        }
+      });
+    }
+
+    function updateFilter(header, value) {
+      activeFilters[header] = value;
+      applyFiltersAndRender();
+    }
+
+    function resetFilters() {
+      Object.keys(activeFilters).forEach(k => activeFilters[k] = '');
+      buildFilters();
+      applyFiltersAndRender();
+    }
+
+    function applyFiltersAndRender() {
+      // Filtrar el set de datos
+      let filteredData = rawData.filter(row => {
+        for (let key in activeFilters) {
+          if (activeFilters[key] !== '' && String(row[key]) !== activeFilters[key]) {
+            return false;
+          }
+        }
+        return true;
+      });
+
+      renderKPIs(filteredData);
+      renderCharts(filteredData);
+      renderTable(filteredData);
+    }
+
+    function renderKPIs(data) {
+      const kpiSection = document.getElementById('kpi-section');
+      document.getElementById('kpi-total').innerText = data.length.toLocaleString();
+
+      // Buscar si existen columnas puramente numéricas para sumarlas dinámicamente como KPI operativo
+      let numericColumns = [];
+      if (data.length > 0) {
+        headers.forEach(h => {
+          let isNumeric = data.slice(0, 5).every(row => !isNaN(row[h]) && row[h] !== '' && typeof row[h] !== 'boolean');
+          if (isNumeric) numericColumns.push(h);
+        });
+      }
+
+      // Limpiar KPIs dinámicos antiguos (manteniendo el total de registros)
+      kpiSection.innerHTML = `
+        <div class="bg-white p-6 rounded-xl border border-slate-100 shadow-xs print-card">
+          <p class="text-xs font-medium text-slate-400 uppercase tracking-wider">Total Registros</p>
+          <p id="kpi-total" class="text-3xl font-bold text-slate-900 mt-2">${data.length.toLocaleString()}</p>
+        </div>
+      `;
+
+      // Renderizar hasta 3 métricas financieras o cuantitativas detectadas automáticamente
+      numericColumns.slice(0, 3).forEach(col => {
+        let sum = data.reduce((acc, row) => acc + (Number(row[col]) || 0), 0);
+        let card = document.createElement('div');
+        card.className = "bg-white p-6 rounded-xl border border-slate-100 shadow-xs print-card";
+        card.innerHTML = `
+          <p class="text-xs font-medium text-slate-400 uppercase tracking-wider">Acumulado ${col}</p>
+          <p class="text-3xl font-bold text-slate-900 mt-2">${Number(sum.toFixed(2)).toLocaleString()}</p>
+        `;
+        kpiSection.appendChild(card);
+      });
+    }
+
+    function renderCharts(data) {
+      // Determinar columna categórica para graficar
+      let catCol = Object.keys(activeFilters)[0] || headers[0];
+      let numCol = headers.find(h => data.slice(0,3).every(r => !isNaN(r[h]) && r[h] !== '')) || null;
+
+      document.getElementById('chart1-title').innerText = `Volumen por ${catCol || 'Categoría'}`;
+      document.getElementById('chart2-title').innerText = numCol ? `Métricas por ${catCol}` : `Distribución Relativa`;
+
+      // Procesar frecuencias
+      let counts = {};
+      let metrics = {};
+      data.forEach(row => {
+        let val = row[catCol] || 'N/A';
+        counts[val] = (counts[val] || 0) + 1;
+        if (numCol) {
+          metrics[val] = (metrics[val] || 0) + (Number(row[numCol]) || 0);
+        }
+      });
+
+      let labels = Object.keys(counts);
+      let valuesCount = Object.values(counts);
+      let valuesMetric = Object.values(metrics);
+
+      // Destruir instancias previas para evitar superposiciones gráficas
+      if (chart1) chart1.destroy();
+      if (chart2) chart2.destroy();
+
+      // Paleta corporativa White Clean (escala de grises, pizarras y azules sutiles)
+      const colors = ['#0f172a', '#334155', '#64748b', '#94a3b8', '#cbd5e1', '#e2e8f0'];
+
+      // Gráfico 1: Barras Horizontales (Muy corporativo)
+      chart1 = new Chart(document.getElementById('chartAnalisis1'), {
+        type: 'bar',
+        data: {
+          labels: labels,
+          datasets: [{
+            label: 'Cantidad',
+            data: valuesCount,
+            backgroundColor: '#0f172a',
+            borderRadius: 6
+          }]
+        },
+        options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } }
+      });
+
+      // Gráfico 2: Línea o Dona según datos numéricos
+      chart2 = new Chart(document.getElementById('chartAnalisis2'), {
+        type: numCol ? 'bar' : 'doughnut',
+        data: {
+          labels: labels,
+          datasets: [{
+            label: numCol || 'Proporción',
+            data: numCol ? valuesMetric : valuesCount,
+            backgroundColor: numCol ? '#3b82f6' : colors,
+            borderRadius: numCol ? 6 : 0
+          }]
+        },
+        options: { responsive: true, maintainAspectRatio: false }
+      });
+    }
+
+    function renderTable(data) {
+      // Renderizar Encabezados
+      const headerRow = document.getElementById('table-headers');
+      headerRow.innerHTML = headers.map(h => `<th class="p-4 font-semibold tracking-wider text-xs text-slate-500">${h}</th>`).join('');
+
+      // Renderizar Filas
+      const tbody = document.getElementById('table-body');
+      document.getElementById('row-count').innerText = `${data.length} filas`;
+
+      if (data.length === 0) {
+        tbody.innerHTML = `<tr><td class="p-4 text-center text-slate-400" colspan="${headers.length}">Ningún registro coincide con los filtros aplicados.</td></tr>`;
+        return;
+      }
+
+      tbody.innerHTML = data.map(row => {
+        return `<tr class="hover:bg-slate-50/80 transition-colors">
+          ${headers.map(h => `<td class="p-4 text-xs font-normal whitespace-nowrap">${row[h] !== undefined ? row[h] : ''}</td>`).join('')}
+        </tr>`;
+      }).join('');
+    }
+  </script>
+</body>
+</html>
